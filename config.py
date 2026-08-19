@@ -46,3 +46,11 @@ RETRIEVER_CONFIG = {
 
 # RAG 问答系统提示词路径
 PROMPT_PATH = os.path.join(BASE_DIR, "prompts", "rag_system.md")
+
+# ============================================================
+# 用户账号（MVP：config 写死，后续接数据库）
+# ============================================================
+USERS = {
+    "admin":  {"password": "admin123", "role": "admin"},
+    "member": {"password": "member123", "role": "member"},
+}

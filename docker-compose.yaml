@@ -1,32 +1,52 @@
 # Data Governance RAG — Docker 编排
 #
 # 开发/测试用法（虚拟机里）:
-#   docker compose run --rm ingest        # 灌库
-#   docker compose run --rm qa "xx问题"   # 单个问题问答
-#
-# 部署到 ECS 时再加 web 服务
+#   docker compose run --rm ingest             # 灌库
+#   docker compose run --rm web python -m rag.pipeline   # 命令行问答测试
+#   docker compose up -d web                    # 启动 Web 服务
+#   → 浏览器访问 http://localhost:8766
 
 services:
   # ============================================================
-  # 灌库 + 问答（CLI 容器，一次性运行）
+  # 灌库（CLI 容器，一次性运行）
   # ============================================================
   ingest:
     build: .
-    container_name: dg-rag
+    container_name: dg-rag-ingest
     environment:
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
       - DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
       - DASHSCOPE_CHAT_MODEL=${DASHSCOPE_CHAT_MODEL:-qwen-max}
       - DASHSCOPE_EMBEDDING_MODEL=${DASHSCOPE_EMBEDDING_MODEL:-text-embedding-v3}
-      # Chroma 持久化到宿主机 ./data，重启/重建不丢
       - CHROMA_DIR=/app/data/chroma
       - TZ=Asia/Shanghai
     volumes:
-      # 来源文档（本机写，容器读）
       - ./Docs:/app/Docs
-      # 向量库持久化（容器生成，宿主机保留）
       - ./data:/app/data
-    # 默认运行 ingest；需要问答时用 command 覆盖（见下面 qa）
     command: ["python", "-m", "ingest.ingest"]
     restart: "no"
     mem_limit: 1g
+
+  # ============================================================
+  # Web 服务（长期运行，团队访问）
+  # ============================================================
+  web:
+    build: .
+    container_name: dg-rag-web
+    ports:
+      - "8766:8766"
+    environment:
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      - DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+      - DASHSCOPE_CHAT_MODEL=${DASHSCOPE_CHAT_MODEL:-qwen-max}
+      - DASHSCOPE_EMBEDDING_MODEL=${DASHSCOPE_EMBEDDING_MODEL:-text-embedding-v3}
+      - CHROMA_DIR=/app/data/chroma
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data:/app/data
+    command: ["gunicorn", "-w", "2", "-k", "uvicorn.workers.UvicornWorker",
+          "web.app:app", "--bind", "0.0.0.0:8766", "--timeout", "300"]
+    depends_on:
+      - ingest
+    restart: unless-stopped
+    mem_limit: 512m

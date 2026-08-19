@@ -19,6 +19,7 @@ services:
       - DASHSCOPE_CHAT_MODEL=${DASHSCOPE_CHAT_MODEL:-qwen-max}
       - DASHSCOPE_EMBEDDING_MODEL=${DASHSCOPE_EMBEDDING_MODEL:-text-embedding-v3}
       - CHROMA_DIR=/app/data/chroma
+      - AUTH_DB_PATH=/app/data/auth.db
       - TZ=Asia/Shanghai
     volumes:
       - ./Docs:/app/Docs
@@ -41,6 +42,7 @@ services:
       - DASHSCOPE_CHAT_MODEL=${DASHSCOPE_CHAT_MODEL:-qwen-max}
       - DASHSCOPE_EMBEDDING_MODEL=${DASHSCOPE_EMBEDDING_MODEL:-text-embedding-v3}
       - CHROMA_DIR=/app/data/chroma
+      - AUTH_DB_PATH=/app/data/auth.db
       - TZ=Asia/Shanghai
     volumes:
       - ./data:/app/data

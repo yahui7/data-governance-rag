@@ -35,6 +35,11 @@ CHROMA_DIR = os.path.join(
 )
 DB_PATH = os.path.join(BASE_DIR, "data", "governance.db")    # 结构化知识（预留）
 
+# token 认证数据库（独立于向量库，重启不丢）
+AUTH_DB_PATH = os.path.join(
+    os.getenv("AUTH_DB_PATH", os.path.join(BASE_DIR, "data", "auth.db"))
+)
+
 # ============================================================
 # 检索 & 问答配置
 # ============================================================

@@ -1,0 +1,26 @@
+# 版本控制
+.git
+.gitignore
+
+# 环境变量（密钥不进镜像）
+.env
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 生成的向量库 / 数据库（容器启动时由 ingest 生成在 data/，不复制）
+data/
+*.db
+
+# 虚拟环境
+venv/
+
+# Docker 自身
+Dockerfile
+docker-compose.yaml
+.dockerignore
+
+# 文档（README 等，和 Source Docs 区分；注意 Docs/ 需要 COPY 进去所以保留）
+README.md

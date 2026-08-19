@@ -1,0 +1,13 @@
+# Data Governance RAG — 依赖
+# 通义千问（DashScope）通过 OpenAI 兼容接口调用，用 openai SDK 即可
+openai
+python-dotenv
+langchain
+langchain-community
+langchain-text-splitters
+chromadb
+fastapi
+uvicorn
+pydantic
+gunicorn
+email-validator

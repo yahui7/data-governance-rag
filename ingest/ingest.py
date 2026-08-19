@@ -86,8 +86,8 @@ def ingest():
     print(f"\n📊 共 {len(all_chunks)} 个 chunk")
 
     print("\n🧠 向量化（DashScope text-embedding-v3）...")
-    # 分批 embedding（避免一次调用过多）
-    batch_size = 64
+    # 分批 embedding：DashScope text-embedding-v3 单次最多 10 条
+    batch_size = 10
     all_embeddings = []
     for i in range(0, len(all_chunks), batch_size):
         batch = all_chunks[i:i+batch_size]

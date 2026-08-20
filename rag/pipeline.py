@@ -134,10 +134,14 @@ def ask(query: str) -> dict:
     system_prompt = build_prompt(query, chunks)
     answer = generate(system_prompt, query)
 
-    sources = [
-        {"source": c["source"], "path": c["path"]}
-        for c in chunks
-    ]
+    # 溯源去重：同一文档只显示一次（保持首次出现顺序）
+    sources = []
+    seen_sources = set()
+    for c in chunks:
+        if c["source"] in seen_sources:
+            continue
+        seen_sources.add(c["source"])
+        sources.append({"source": c["source"], "path": c["path"]})
     return {"answer": answer, "sources": sources}
 
 

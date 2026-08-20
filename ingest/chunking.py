@@ -105,10 +105,9 @@ def split_document(raw_text: str, source: str) -> list[dict]:
             for h3 in h3_chunks:
                 h3_text = h3.page_content
                 # 若 ### 段仍然过长，再按字长兜底
+                # 注意：RecursiveCharacterTextSplitter.split_text() 返回 str 列表
                 if len(h3_text) > CHILD_CHUNK_SIZE:
-                    children.extend([c.page_content for c in char_splitter.split_text(h3_text)])
-                else:
-                    children.append(h3_text)
+                    children.extend(char_splitter.split_text(h3_text))
         else:
             # 父块内没有 ###，整个父块作为唯一子块
             children.append(parent_text)

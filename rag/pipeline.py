@@ -15,54 +15,75 @@ from ingest.docstore import get_parent
 from rag.embeddings import embed_query
 
 
-def get_collection():
-    """获取 Chroma collection（只存子块）"""
+def get_collections():
+    """获取两个 Chroma collection（父块 + 子块）"""
     import chromadb
     client = chromadb.PersistentClient(path=CHROMA_DIR)
-    return client.get_or_create_collection("governance_methodology")
+    child = client.get_or_create_collection("governance_child")
+    parent = client.get_or_create_collection("governance_parent")
+    return child, parent
 
 
-def retrieve(query: str, top_k: int = None) -> list[dict]:
+def retrieve(query: str, top_k: int = None, parent_top_k: int = None) -> list[dict]:
     """
-    small-to-big 检索：
-      1. 在 Chroma 里检索子块（精确命中）
-      2. 每个命中子块映射回父块，取父块全文
-      3. 按父块去重（多个子块命中同一父块，合并）
+    混合检索（hybrid）：
+      ① 父块直接检索 → 命中"总览"类父块，得到完整全貌
+      ② 子块检索 → 命中精确细节，映射回父块取全文
+      两者合并、按父块去重，父块命中的排前面。
 
     返回:
         [{text, source, path, parent_id}]
     """
     top_k = top_k or RETRIEVER_CONFIG["top_k"]
-    collection = get_collection()
+    parent_top_k = parent_top_k or RETRIEVER_CONFIG.get("parent_top_k", 3)
+    child_col, parent_col = get_collections()
 
     q = embed_query(query)
-    results = collection.query(
-        query_embeddings=[q],
-        n_results=top_k,
-    )
-
-    # 收集命中子块的 parent_id
-    parent_ids = []
-    for meta in results["metadatas"][0]:
-        pid = meta.get("parent_id", "")
-        if pid:
-            parent_ids.append(pid)
-
-    # 去重 + 从 SQLite 取父块全文
-    seen = set()
     chunks = []
-    for pid in parent_ids:
-        if pid in seen:
-            continue
-        seen.add(pid)
-        parent = get_parent(pid)
-        if parent:
+    seen_parent_ids = set()
+
+    # ---------- ① 父块检索（总览问题直接命中父块） ----------
+    try:
+        parent_results = parent_col.query(
+            query_embeddings=[q],
+            n_results=parent_top_k,
+        )
+        for i, pid in enumerate(parent_results["ids"][0]):
+            meta = parent_results["metadatas"][0][i]
+            doc = parent_results["documents"][0][i]
+            if pid in seen_parent_ids:
+                continue
+            seen_parent_ids.add(pid)
             chunks.append({
-                "text": parent["parent_text"],
-                "source": parent["source"],
-                "path": parent["path"],
+                "text": doc,
+                "source": meta.get("source", ""),
+                "path": meta.get("path", ""),
                 "parent_id": pid,
             })
+    except Exception as e:
+        print(f"⚠️ 父块检索失败: {e}")
+
+    # ---------- ② 子块检索 → 映射父块 ----------
+    try:
+        child_results = child_col.query(
+            query_embeddings=[q],
+            n_results=top_k,
+        )
+        for meta in child_results["metadatas"][0]:
+            pid = meta.get("parent_id", "")
+            if not pid or pid in seen_parent_ids:
+                continue
+            parent = get_parent(pid)
+            if parent:
+                seen_parent_ids.add(pid)
+                chunks.append({
+                    "text": parent["parent_text"],
+                    "source": parent["source"],
+                    "path": parent["path"],
+                    "parent_id": pid,
+                })
+    except Exception as e:
+        print(f"⚠️ 子块检索失败: {e}")
 
     return chunks
 

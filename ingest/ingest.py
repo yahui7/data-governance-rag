@@ -37,26 +37,45 @@ def file_hash(path: str) -> str:
         return hashlib.md5(f.read()).hexdigest()
 
 
-def get_chroma_collection():
-    """获取 Chroma collection（子块向量）"""
+def get_chroma_collections():
+    """
+    获取两个 Chroma collection：
+      - child:  子块向量（精确检索）
+      - parent: 父块向量（总览问题直接命中父块）
+    """
     import chromadb
     client = chromadb.PersistentClient(path=CHROMA_DIR)
-    return client.get_or_create_collection("governance_methodology")
+    child = client.get_or_create_collection("governance_child")
+    parent = client.get_or_create_collection("governance_parent")
+    return child, parent
 
 
-def delete_source_from_chroma(collection, source: str) -> None:
-    """按 source 删除该文档的所有子块向量"""
-    try:
-        collection.delete(where={"source": source})
-    except Exception as e:
-        print(f"  ⚠️ 删除 {source} 旧向量失败: {e}")
+def delete_source_from_chroma(collections, source: str) -> None:
+    """按 source 删除该文档在两个 collection 里的向量（子块+父块）"""
+    for coll in collections:
+        try:
+            coll.delete(where={"source": source})
+        except Exception as e:
+            print(f"  ⚠️ 删除 {source} 旧向量失败: {e}")
 
 
-def ingest_one_document(path: str, source: str, collection) -> int:
+def embed_batch(texts: list[str]) -> list[list[float]]:
+    """批量向量化（DashScope 单次最多 10 条）"""
+    batch_size = 10
+    result = []
+    for i in range(0, len(texts), batch_size):
+        result.extend(embed_texts(texts[i:i+batch_size]))
+    return result
+
+
+def ingest_one_document(path: str, source: str, child_col, parent_col) -> int:
     """
-    处理单个文档：切片 → 向量化子块入 Chroma → 父块入 SQLite。
+    处理单个文档：
+      子块向量 → Chroma(child_col) 精确检索
+      父块向量 → Chroma(parent_col) 总览检索
+      父块全文 → SQLite docstore
 
-    返回: 子块数量
+    返回: 子块总数
     """
     with open(path, "r", encoding="utf-8") as f:
         raw = f.read()
@@ -64,8 +83,11 @@ def ingest_one_document(path: str, source: str, collection) -> int:
     fhash = file_hash(path)
     records = split_document(raw, source)
 
-    # ---- 子块向量化并写入 Chroma ----
-    # 收集所有子块
+    if not records:
+        print(f"  ⚠️ {source} 没有切出任何块，跳过")
+        return 0
+
+    # ---------- 收集子块 ----------
     all_children = []
     for rec in records:
         for i, child in enumerate(rec["children"]):
@@ -75,35 +97,45 @@ def ingest_one_document(path: str, source: str, collection) -> int:
                 "text": child,
             })
 
-    if not all_children:
-        print(f"  ⚠️ {source} 没有切出任何子块，跳过")
-        return 0
+    # ---------- 先删旧（两个 collection 都要） ----------
+    delete_source_from_chroma([child_col, parent_col], source)
 
-    # 批量向量化（DashScope 单次最多 10 条）
-    batch_size = 10
-    embeddings = []
-    for i in range(0, len(all_children), batch_size):
-        batch_texts = [c["text"] for c in all_children[i:i+batch_size]]
-        embeddings.extend(embed_texts(batch_texts))
+    # ---------- 子块向量化 → Chroma child ----------
+    if all_children:
+        child_embeds = embed_batch([c["text"] for c in all_children])
+        child_col.add(
+            ids=[c["child_id"] for c in all_children],
+            embeddings=child_embeds,
+            documents=[c["text"] for c in all_children],
+            metadatas=[
+                {
+                    "parent_id": c["parent_id"],
+                    "source": source,
+                    "path": path,
+                    "file_hash": fhash,
+                }
+                for c in all_children
+            ],
+        )
 
-    # 写入 Chroma（先删旧，防重复）
-    delete_source_from_chroma(collection, source)
-    collection.add(
-        ids=[c["child_id"] for c in all_children],
-        embeddings=embeddings,
-        documents=[c["text"] for c in all_children],
+    # ---------- 父块向量化 → Chroma parent ----------
+    parent_texts = [rec["parent_text"] for rec in records]
+    parent_embeds = embed_batch(parent_texts)
+    parent_col.add(
+        ids=[rec["parent_id"] for rec in records],
+        embeddings=parent_embeds,
+        documents=parent_texts,
         metadatas=[
             {
-                "parent_id": c["parent_id"],
                 "source": source,
                 "path": path,
                 "file_hash": fhash,
             }
-            for c in all_children
+            for _ in records
         ],
     )
 
-    # ---- 父块写入 SQLite docstore ----
+    # ---------- 父块全文 → SQLite docstore ----------
     for rec in records:
         rec["source"] = source
         rec["path"] = path
@@ -121,7 +153,7 @@ def ingest_one_document(path: str, source: str, collection) -> int:
 def ingest():
     print("📂 初始化...")
     init_db()
-    collection = get_chroma_collection()
+    child_col, parent_col = get_chroma_collections()
 
     if not os.path.isdir(DOCS_DIR):
         print(f"❌ 文档目录不存在: {DOCS_DIR}")
@@ -153,14 +185,14 @@ def ingest():
             stats["changed"] += 1
 
         print(f"📥 {action}: {source}")
-        n = ingest_one_document(path, source, collection)
+        n = ingest_one_document(path, source, child_col, parent_col)
         if n > 0:
             set_file_hash(source, cur_hash)
         print(f"    → {n} 子块入库\n")
 
     print("=" * 40)
     print(f"完成。新增 {stats['new']}，变更 {stats['changed']}，跳过 {stats['skipped']}")
-    print(f"Chroma 子块总数: {collection.count()}")
+    print(f"Chroma 子块总数: {child_col.count()}，父块总数: {parent_col.count()}")
 
 
 if __name__ == "__main__":

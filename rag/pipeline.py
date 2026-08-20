@@ -1,6 +1,6 @@
 """
-RAG 查询流水线
-query embedding → Chroma 检索 → 拼 prompt → qwen-max 生成（带溯源）
+RAG 查询流水线（small-to-big）
+query embedding → Chroma 检索子块 → 映射父块 → 取父块全文 → LLM（带溯源）
 """
 
 import os
@@ -11,24 +11,26 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import (
     CHROMA_DIR, PROMPT_PATH, RETRIEVER_CONFIG, DASHSCOPE_CONFIG,
 )
+from ingest.docstore import get_parent
 from rag.embeddings import embed_query
 
 
 def get_collection():
-    """获取 Chroma collection"""
+    """获取 Chroma collection（只存子块）"""
     import chromadb
     client = chromadb.PersistentClient(path=CHROMA_DIR)
-    return client.get_or_create_collection(
-        name="governance_methodology",
-    )
+    return client.get_or_create_collection("governance_methodology")
 
 
 def retrieve(query: str, top_k: int = None) -> list[dict]:
     """
-    向量检索：query → embedding → Chroma top_k。
+    small-to-big 检索：
+      1. 在 Chroma 里检索子块（精确命中）
+      2. 每个命中子块映射回父块，取父块全文
+      3. 按父块去重（多个子块命中同一父块，合并）
 
     返回:
-        [{text, source, path, score}]
+        [{text, source, path, parent_id}]
     """
     top_k = top_k or RETRIEVER_CONFIG["top_k"]
     collection = get_collection()
@@ -39,32 +41,43 @@ def retrieve(query: str, top_k: int = None) -> list[dict]:
         n_results=top_k,
     )
 
+    # 收集命中子块的 parent_id
+    parent_ids = []
+    for meta in results["metadatas"][0]:
+        pid = meta.get("parent_id", "")
+        if pid:
+            parent_ids.append(pid)
+
+    # 去重 + 从 SQLite 取父块全文
+    seen = set()
     chunks = []
-    for i, doc in enumerate(results["documents"][0]):
-        meta = results["metadatas"][0][i]
-        dist = results["distances"][0][i]
-        chunks.append({
-            "text": doc,
-            "source": meta.get("source", ""),
-            "path": meta.get("path", ""),
-            "score": dist,   # Chroma 默认 L2 距离，越小越近
-        })
+    for pid in parent_ids:
+        if pid in seen:
+            continue
+        seen.add(pid)
+        parent = get_parent(pid)
+        if parent:
+            chunks.append({
+                "text": parent["parent_text"],
+                "source": parent["source"],
+                "path": parent["path"],
+                "parent_id": pid,
+            })
+
     return chunks
 
 
 def build_prompt(query: str, chunks: list[dict]) -> str:
-    """把检索结果拼进系统提示词的 {context}"""
+    """把父块全文拼进系统提示词的 {context}"""
     with open(PROMPT_PATH, "r", encoding="utf-8") as f:
         system_prompt = f.read()
 
-    # 拼接检索上下文（带出处）
     context_parts = []
     for i, chunk in enumerate(chunks):
         context_parts.append(f"【片段{i+1}】来源:《{chunk['source']}》\n{chunk['text']}")
 
     context = "\n\n".join(context_parts)
     system_prompt = system_prompt.replace("{context}", context)
-
     return system_prompt
 
 
@@ -91,9 +104,6 @@ def generate(system_prompt: str, query: str) -> str:
 def ask(query: str) -> dict:
     """
     完整 RAG 问答：检索 → 生成 → 返回答案 + 溯源。
-
-    返回:
-        {"answer": str, "sources": [...]}
     """
     chunks = retrieve(query)
 

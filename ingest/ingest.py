@@ -96,6 +96,7 @@ def ingest():
         print(f"  ✅ {min(i+batch_size, len(all_chunks))}/{len(all_chunks)} 完成")
 
     print("\n💾 存入 Chroma...")
+    
     import chromadb
     client = chromadb.PersistentClient(path=CHROMA_DIR)
 

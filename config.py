@@ -44,7 +44,7 @@ AUTH_DB_PATH = os.path.join(
 # 检索 & 问答配置
 # ============================================================
 RETRIEVER_CONFIG = {
-    "top_k": 5,             # 检索返回几个 chunk
+    "top_k": 8,             # 检索返回几个 chunk
     "chunk_size": 800,      # 切块长度（标题切块为主，此为兜底）
     "chunk_overlap": 100,   # 切块重叠
 }

@@ -212,20 +212,54 @@
         }
 
         // 极简 Markdown 渲染（够用即可：标题/列表/粗体/引用/代码）
+        // 用懒加载 minimarkdown 式逐行处理，保证有序列表编号正确
         function md(text) {
-            let s = text.replace(/&/g, '&amp;').replace(/</g, '&lt;');
-            s = s.replace(/^### (.*)$/gm, '<h3>$1</h3>');
-            s = s.replace(/^## (.*)$/gm, '<h2>$1</h2>');
-            s = s.replace(/^# (.*)$/gm, '<h1>$1</h1>');
-            s = s.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-            s = s.replace(/^(> .*)$/gm, '<blockquote>$1</blockquote>');
-            s = s.replace(/^\d+\.\s+(.*)$/gm, '<ol><li>$1</li></ol>');
-            s = s.replace(/^[-*]\s+(.*)$/gm, '<li>$1</li>');
-            // 合并连续的 <li> 为列表
-            s = s.replace(/<li>(.*?)<\/li>(\s*<li>)/g, '<li>$1$2');
-            s = s.replace(/(<li>.*?<\/li>)(?![\s\S]*<\/li>)/g, '$1');
-            s = s.replace(/\n\n/g, '<br>');
-            return s;
+            const lines = text.split('\n');
+            let html = [];
+            let listOpen = null;   // 当前打开的列表标签: 'ol' 或 'ul'
+
+            function closeList() {
+                if (listOpen) { html.push('</' + listOpen + '>'); listOpen = null; }
+            }
+            function openList(tag) {
+                if (listOpen !== tag) { closeList(); html.push('<' + tag + '>'); listOpen = tag; }
+            }
+            function inline(s) {
+                return s
+                    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            }
+
+            for (let line of lines) {
+                const trim = line.trim();
+
+                // 有序列表项： 1. xxx
+                let m = trim.match(/^(\d+)\.\s+(.*)/);
+                if (m) { openList('ol'); html.push('<li>' + inline(m[2]) + '</li>'); continue; }
+
+                // 无序列表项： - xxx / * xxx
+                m = trim.match(/^[-*]\s+(.*)/);
+                if (m) { openList('ul'); html.push('<li>' + inline(m[1]) + '</li>'); continue; }
+
+                // 非列表行：先关闭列表
+                closeList();
+
+                // 标题
+                if (trim.startsWith('### ')) { html.push('<h3>' + inline(trim.slice(4)) + '</h3>'); continue; }
+                if (trim.startsWith('## '))  { html.push('<h2>' + inline(trim.slice(3)) + '</h2>'); continue; }
+                if (trim.startsWith('# '))   { html.push('<h1>' + inline(trim.slice(2)) + '</h1>'); continue; }
+
+                // 引用
+                if (trim.startsWith('> ')) { html.push('<blockquote>' + inline(trim.slice(2)) + '</blockquote>'); continue; }
+
+                // 空行
+                if (trim === '') { continue; }
+
+                // 普通段落
+                html.push('<p>' + inline(trim) + '</p>');
+            }
+            closeList();
+            return html.join('');
         }
 
         function addMessage(role, content, sources) {

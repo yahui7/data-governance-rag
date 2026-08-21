@@ -211,54 +211,90 @@
             clearToken(); clearUser(); showLogin();
         }
 
-        // 极简 Markdown 渲染（够用即可：标题/列表/粗体/引用/代码）
-        // 用懒加载 minimarkdown 式逐行处理，保证有序列表编号正确
+        // 极简 Markdown 渲染（支持多级列表：有序外层 + 无序子项）
+        // 处理：
+        //   1. **项**          → <ol><li>项
+        //      - **子项**       → 在 ol 的当前 li 内嵌套 <ul><li>
+        //   2. **项**          → <ol> 的新 <li>
         function md(text) {
             const lines = text.split('\n');
-            let html = [];
-            let listOpen = null;   // 当前打开的列表标签: 'ol' 或 'ul'
+            const html = [];
 
-            function closeList() {
-                if (listOpen) { html.push('</' + listOpen + '>'); listOpen = null; }
-            }
-            function openList(tag) {
-                if (listOpen !== tag) { closeList(); html.push('<' + tag + '>'); listOpen = tag; }
-            }
             function inline(s) {
                 return s
                     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
                     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
             }
 
-            for (let line of lines) {
-                const trim = line.trim();
+            // 栈：记录当前打开的列表标签，及"该层是否刚打开 li"
+            let stack = [];       // 元素: {tag: 'ol'|'ul', inItem: bool}
 
-                // 有序列表项： 1. xxx
+            function top() { return stack[stack.length - 1]; }
+            function closeItem() {
+                const t = top();
+                if (t && t.inItem) { html.push('</li>'); t.inItem = false; }
+            }
+            function closeTop() {
+                const t = top();
+                if (t && t.inItem) { html.push('</li>'); t.inItem = false; }
+                if (t) { html.push('</' + t.tag + '>'); stack.pop(); }
+            }
+            function openList(tag) {
+                html.push('<' + tag + '>');
+                stack.push({ tag: tag, inItem: false });
+            }
+            function openItem(tag, content) {
+                // 弹出直到栈顶是 tag 类型（或栈空），期间闭合 item/列表
+                while (stack.length > 0 && top().tag !== tag) { closeTop(); }
+                if (stack.length === 0) { openList(tag); }
+                else { closeItem(); }   // 栈顶已是 tag，先关上一个 item
+                const tt = top();
+                html.push('<li>' + inline(content));
+                tt.inItem = true;
+            }
+
+            for (const raw of lines) {
+                const indent = raw.match(/^[\s]*/)[0].replace(/\t/g, '  ').length;
+                const trim = raw.trim();
+
+                if (trim === '') {
+                    // 空行：关闭当前 item，但保留顶层列表打开
+                    closeItem();
+                    continue;
+                }
+
+                // 有序项：1. xxx
                 let m = trim.match(/^(\d+)\.\s+(.*)/);
-                if (m) { openList('ol'); html.push('<li>' + inline(m[2]) + '</li>'); continue; }
+                if (m) { openItem('ol', m[2]); continue; }
 
-                // 无序列表项： - xxx / * xxx
+                // 无序项：- xxx / * xxx
                 m = trim.match(/^[-*]\s+(.*)/);
-                if (m) { openList('ul'); html.push('<li>' + inline(m[1]) + '</li>'); continue; }
+                if (m) {
+                    const t = top();
+                    // 有缩进且当前在 ol item 内 → 嵌套为子列表
+                    if (indent > 0 && t && t.tag === 'ol' && t.inItem) {
+                        html.push('<ul>');
+                        stack.push({ tag: 'ul', inItem: false });
+                        openItem('ul', m[1]);
+                    } else {
+                        openItem('ul', m[1]);
+                    }
+                    continue;
+                }
 
-                // 非列表行：先关闭列表
-                closeList();
+                // 标题/引用/段落：先关闭所有打开的列表
+                while (stack.length > 0) { closeTop(); }
 
-                // 标题
-                if (trim.startsWith('### ')) { html.push('<h3>' + inline(trim.slice(4)) + '</h3>'); continue; }
-                if (trim.startsWith('## '))  { html.push('<h2>' + inline(trim.slice(3)) + '</h2>'); continue; }
-                if (trim.startsWith('# '))   { html.push('<h1>' + inline(trim.slice(2)) + '</h1>'); continue; }
+                if (trim.startsWith('#### ')) { html.push('<h4>' + inline(trim.slice(5)) + '</h4>'); continue; }
+                if (trim.startsWith('### '))  { html.push('<h3>' + inline(trim.slice(4)) + '</h3>'); continue; }
+                if (trim.startsWith('## '))   { html.push('<h2>' + inline(trim.slice(3)) + '</h2>'); continue; }
+                if (trim.startsWith('# '))    { html.push('<h1>' + inline(trim.slice(2)) + '</h1>'); continue; }
+                if (trim.startsWith('> '))    { html.push('<blockquote>' + inline(trim.slice(2)) + '</blockquote>'); continue; }
 
-                // 引用
-                if (trim.startsWith('> ')) { html.push('<blockquote>' + inline(trim.slice(2)) + '</blockquote>'); continue; }
-
-                // 空行
-                if (trim === '') { continue; }
-
-                // 普通段落
                 html.push('<p>' + inline(trim) + '</p>');
             }
-            closeList();
+            // 收尾：关闭所有打开的列表
+            while (stack.length > 0) { closeTop(); }
             return html.join('');
         }
 

@@ -5,6 +5,10 @@
 #   docker compose run --rm web python -m rag.pipeline   # 命令行问答测试
 #   docker compose up -d web                    # 启动 Web 服务
 #   → 浏览器访问 http://localhost:8766
+#
+# 部署（ECS，走全局网关）:
+#   web 容器加入 app-public-net，由 nginx-gateway 反代
+#   ingest 是一次性灌库，不入公共网络
 
 services:
   # ============================================================
@@ -34,8 +38,8 @@ services:
   web:
     build: .
     container_name: dg-rag-web
-    ports:
-      - "8766:8766"
+    expose:
+      - "8766"
     environment:
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
       - DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
@@ -52,3 +56,11 @@ services:
       - ingest
     restart: unless-stopped
     mem_limit: 512m
+    networks:
+      - default      # 项目内部网络（ingest 用；实际 web 与 ingest 不直接通信，保留无害）
+      - public       # 全局网络，由 nginx-gateway 反代访问
+
+networks:
+  public:
+    external: true
+    name: app-public-net
